@@ -1,3 +1,4 @@
 config.yml
 test/dosomething
 log/*
+id_rsa*
