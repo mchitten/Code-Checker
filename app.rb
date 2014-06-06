@@ -26,7 +26,7 @@ get '/' do
 end
 
 get '/get_token' do
-  redirect to @gh.authorize_url redirect_uri: 'http://mcs.ngrok.com/token', scope: 'repo,write:public_key'
+  redirect to @gh.authorize_url redirect_uri: 'http://mcs.ngrok.com/token', scope: 'repo'
 end
 
 get '/token' do
@@ -37,6 +37,17 @@ end
 get '/pr' do
   @user, @repo = @config['user'], @config['repo']
   gh = Github.new oauth_token: @config['token'], user: @user, repo: @repo
+
+  unless File.exist?("./test/#{@user}/#{@repo}/id_rsa_#{@user}_#{@repo}")
+    p 'creating key...'
+    `mkdir -p ./test/#{@user}/#{@repo}`
+    k = SSHKey.generate
+    File.open("./test/#{@user}/#{@repo}/id_rsa_#{@user}_#{@repo}", 'w') { |f| f.write(k.private_key) }
+    File.open("./test/#{@user}/#{@repo}/id_rsa_#{@user}_#{@repo}.pub", 'w') { |f| f.write(k.ssh_public_key) }
+    `sh ./test/store_rsa.sh #{@user} #{@repo}`
+
+    gh.repos.keys.create title: 'Codey.io', key: k.ssh_public_key
+  end
 end
 
 # This is the route that receives the GitHub payload.
@@ -47,14 +58,17 @@ post '/pr' do
   # # Basic user and repo information.  You can figure out these values from this standard: git@github.com:@user/@repo.git.
   @user, @repo = @config['user'], @config['repo']
 
-  # Basic GitHub auth.
+  # Auth through our OAuth token.
   gh = Github.new oauth_token: @config['token'], user: @user, repo: @repo
 
-  unless File.exist?("id_rsa_#{@user}_#{@repo}")
-    p 'creating key...'
+  # Set up RSA keys if applicable.
+  rsa_path = "./test/#{@user}/#{@repo}/id_rsa_#{@user}_#{@repo}"
+  unless File.exist?(rsa_path)
+    `mkdir -p ./test/#{@user}/#{@repo}`
     k = SSHKey.generate
-    File.open('id_rsa_mchitten_test', 'w') { |f| f.write(k.private_key) }
-    File.open('id_rsa_mchitten_test.pub', 'w') { |f| f.write(k.ssh_public_key) }
+    File.open(rsa_path, 'w') { |f| f.write(k.private_key) }
+    File.open("#{rsa_path}.pub", 'w') { |f| f.write(k.ssh_public_key) }
+    `sh ./test/store_rsa.sh #{@user} #{@repo}`
 
     gh.repos.keys.create title: 'Codey.io', key: k.ssh_public_key
   end
@@ -89,39 +103,37 @@ post '/pr' do
     @pr = @load['number']
   end
 
-  results = `mkdir -p ./test/#{@user}/#{@repo} && cd ./test && sh pull.sh #{repo_path} #{branch_name} #{}`
+  # Don't even bother unless there's  PR number.  We don't want to comment on every commit!
+  if @pr.to_i > 0
+    results = `sh ./test/pull.sh #{repo_path} #{branch_name} #{@user} #{@repo}`
+    report = JSON.parse(results)
 
-  # # Don't even bother unless there's  PR number.  We don't want to comment on every commit!
-  # if @pr > 0
-  #   results = `cd ./test && sh pull.sh #{repo_path} #{branch_name}`
-  #   report = JSON.parse(results)
+    # Hooks into the GitHub API.  Used below.
+    reporter = gh.pull_requests
+    status = gh.repos.statuses
 
-  #   # Hooks into the GitHub API.  Used below.
-  #   reporter = gh.pull_requests
-  #   status = gh.repos.statuses
+    changed_files = reporter.files(@user, @repo, @pr).map(&:filename)
+    existing_comments = reporter.comments.list(@user, @repo, request_id: @pr).body.map { |i| "#{i.path}:#{i.position}:#{i.body}" }
 
-  #   changed_files = reporter.files(@user, @repo, @pr).map(&:filename)
-  #   existing_comments = reporter.comments.list(@user, @repo, request_id: @pr).body.map { |i| "#{i.path}:#{i.position}:#{i.body}" }
-
-  #   # Run through the files and comment on them, then leave a state.
-  #   report['files'].each do |file, smell|
-  #     # Remove the relative URL to this directory.
-  #     file = file.gsub(Dir.getwd + "/test/dosomething/", '')
-  #     if changed_files.include?(file)
-  #       if smell['errors'] > 0 || smell['warnings'] > 0
-  #         # Leave PR comment on specified line.
-  #         smell['messages'].each do |message|
-  #           unless existing_comments.include?("#{file}:#{message['line']}:#{message['message']}")
-  #             reporter.comments.create @user, @repo, @pr, body: "#{message['message']}", commit_id: sha, path: file, position: message['line']
-  #           end
-  #         end
-  #         # Leave a status update.
-  #         status.create @user, @repo, sha, :state => "error", :description => "CodeSniffer found errors in this code."
-  #       else
-  #         # Leave a successful status update.
-  #         status.crate @user, @repo, sha, :state => "success", :description => "CodeSniffer tests passed."
-  #       end
-  #     end
-  #   end
-  # end
+    # Run through the files and comment on them, then leave a state.
+    report['files'].each do |file|
+      # Remove the relative URL to this directory.
+      file_path = file['path'].gsub(Dir.getwd + "/test/#{@user}/#{@repo}/", '')
+      if changed_files.include?(file_path)
+        file_path = file['path']
+        if file['offenses'].is_a?(Array)
+          file['offenses'].each do |offense|
+            unless existing_comments.include?("#{file_path}:#{offense['location']['line']}:#{offense['message']}")
+              reporter.comments.create @user, @repo, @pr, body: "#{offense['message']}", commit_id: sha, path: file_path, position: offense['location']['line']
+            end
+          end
+          # Leave a status update.
+          status.create @user, @repo, sha, state: "error", description: "CodeSniffer found errors in this code."
+        else
+          # Leave a successful status update.
+          status.crate @user, @repo, sha, state: "success", description: "CodeSniffer tests passed."
+        end
+      end
+    end
+  end
 end
