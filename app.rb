@@ -31,7 +31,6 @@ end
 
 get '/token' do
   @token = @gh.get_token(params['code']).token
-  p @token
 end
 
 get '/pr' do
@@ -39,7 +38,6 @@ get '/pr' do
   gh = Github.new oauth_token: @config['token'], user: @user, repo: @repo
 
   unless File.exist?("./test/#{@user}/#{@repo}/id_rsa_#{@user}_#{@repo}")
-    p 'creating key...'
     `mkdir -p ./test/#{@user}/#{@repo}`
     k = SSHKey.generate
     File.open("./test/#{@user}/#{@repo}/id_rsa_#{@user}_#{@repo}", 'w') { |f| f.write(k.private_key) }
@@ -74,22 +72,18 @@ post '/pr' do
   end
 
   # Commit listener.
-  if @load['before'] && @load['after']
+  if @load['pull_request'] && @load['action'] == 'synchronize'
+    pr = @load['pull_request']
     # The repository to fetch the diff from.
-    repo_path = @load['repository']['url'].gsub(/https?\:\/\/github\.com\//i, '') + '.git'
+    repo_path = pr['head']['repo']['full_name'] + '.git'
     # The branch to fetch the diff from.
-    branch_name = @load['ref'].gsub('refs/heads/', '')
+    branch_name = pr['head']['ref']
 
     # The SHA of the new commit.
-    sha = @load['after']
+    sha = pr['head']['sha']
 
     # The wannabe PR number.
-    @pr = 0
-
-    # Runs through the pull requests to find one where the HEAD matches this commit's SHA.
-    gh.pull_requests.list(@user, @repo).body.each do |pr|
-      @pr = pr.number if pr.head.sha == sha
-    end
+    @pr = pr['number']
   # A pull request was opened.
   elsif @load['pull_request'] && @load['action'] == "opened"
     request = @load['pull_request']
