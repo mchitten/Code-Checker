@@ -71,21 +71,8 @@ post '/pr' do
     gh.repos.keys.create title: 'Codey.io', key: k.ssh_public_key
   end
 
-  # Commit listener.
-  if @load['pull_request'] && @load['action'] == 'synchronize'
-    pr = @load['pull_request']
-    # The repository to fetch the diff from.
-    repo_path = pr['head']['repo']['full_name'] + '.git'
-    # The branch to fetch the diff from.
-    branch_name = pr['head']['ref']
-
-    # The SHA of the new commit.
-    sha = pr['head']['sha']
-
-    # The wannabe PR number.
-    @pr = pr['number']
-  # A pull request was opened.
-  elsif @load['pull_request'] && @load['action'] == "opened"
+  # A pull request was opened, or a commit was pushed.
+  if @load['pull_request'] && ['opened', 'synchronize'].include?(@load['action'])
     request = @load['pull_request']
     # The repository that this PR is coming from.
     repo_path = request['head']['repo']['full_name'] + '.git'
