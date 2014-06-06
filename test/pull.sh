@@ -10,10 +10,8 @@ RUNNING_BRANCH="$UZER/$REPO/${COMPARE_BRANCH}"
 REPO_PATH="$UZER/$REPO"
 GH_HOST="$UZER-$REPO"
 RSA_FILE="id_rsa_${UZER}_${REPO}"
-CURDIR="$PWD"
-RSA_PATH="$CURDIR/$REPO_PATH/$RSA_FILE"
-
-mkdir -p $RUNNING_BRANCH
+CONFIG_PATH="$PWD/test"
+RSA_PATH="$CONFIG_PATH/$REPO_PATH/$RSA_FILE"
 
 # if [[ ! -f $RSA_PATH ]]; then
 #   ssh-keygen -f $RSA_PATH -N "" -q
@@ -24,6 +22,10 @@ mkdir -p $RUNNING_BRANCH
 #   IdentityFile $RSA_PATH.pub
 # DELIM
 # fi
+
+cd test
+
+mkdir -p $RUNNING_BRANCH
 
 cd $RUNNING_BRANCH && git init --quiet
 
@@ -40,7 +42,7 @@ do
   files="$files $i"
 done
 
-rubocop --format=json $files
+rubocop --format json -c "${CONFIG_PATH}/rubocop.yml" --force-exclusion $files
 git remote remove compare
 cd ../
 rm -rf $COMPARE_BRANCH
